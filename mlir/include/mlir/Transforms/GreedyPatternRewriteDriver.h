@@ -17,7 +17,6 @@
 #include "mlir/Rewrite/FrozenRewritePatternSet.h"
 
 namespace mlir {
-
 /// This enum controls which ops are put on the worklist during a greedy
 /// pattern rewrite.
 enum class GreedyRewriteStrictness {
@@ -37,6 +36,19 @@ enum class GreedySimplifyRegionLevel {
   /// Run extra simplificiations (e.g. block merging), these can be
   /// more costly or have some tradeoffs associated.
   Aggressive
+};
+
+/// Which trivially dead operations the greedy rewriter erases.
+enum class GreedyDeadCodeElimination {
+  /// Erase no dead operation. An operation is erased only by a pattern or by
+  /// folding it away.
+  Disabled,
+  /// Erase only operations that rewriting left dead: an operation is erased
+  /// once the erasure or replacement of another operation drops its last use.
+  /// Operations that were dead before rewriting are kept.
+  NewlyDead,
+  /// Erase every trivially dead operation.
+  All
 };
 
 /// This class allows control over how the GreedyPatternRewriteDriver works.
@@ -130,6 +142,17 @@ public:
     return *this;
   }
 
+  /// Which trivially dead operations are erased while greedily rewriting.
+  /// Region simplification, if enabled, still removes dead values.
+  GreedyDeadCodeElimination getDeadCodeElimination() const {
+    return deadCodeElimination;
+  }
+  GreedyRewriteConfig &
+  setDeadCodeElimination(GreedyDeadCodeElimination elimination) {
+    deadCodeElimination = elimination;
+    return *this;
+  }
+
   /// If set to "true", constants are CSE'd (even across multiple regions that
   /// are in a parent-ancestor relationship).
   bool isConstantCSEEnabled() const { return cseConstants; }
@@ -171,6 +194,8 @@ private:
   GreedyRewriteStrictness strictness = GreedyRewriteStrictness::AnyOp;
   RewriterBase::Listener *listener = nullptr;
   bool fold = true;
+  GreedyDeadCodeElimination deadCodeElimination =
+      GreedyDeadCodeElimination::All;
   bool cseConstants = true;
   bool cseBetweenIterations = false;
 };

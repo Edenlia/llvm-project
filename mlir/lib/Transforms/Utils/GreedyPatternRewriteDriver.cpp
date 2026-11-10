@@ -42,7 +42,6 @@ using namespace mlir;
 #define DEBUG_TYPE "greedy-rewriter"
 
 namespace {
-
 //===----------------------------------------------------------------------===//
 // Debugging Infrastructure
 //===----------------------------------------------------------------------===//
@@ -548,6 +547,10 @@ private:
   /// simplifications.
   void addOperandsToWorklist(Operation *op);
 
+  /// Return whether the dead code elimination mode allows erasing `op` once it
+  /// is trivially dead.
+  bool mayEraseIfDead(Operation *op) const;
+
   /// Notify the driver that the given block was inserted.
   void notifyBlockInserted(Block *block, Region *previous,
                            Region::iterator previousIt) override;
@@ -573,6 +576,10 @@ private:
   PatternApplicator matcher;
 
   DeadnessListener deadnessListener;
+
+  /// Operations that lost a use to the erasure of another operation. With
+  /// GreedyDeadCodeElimination::NewlyDead, only these are erased once dead.
+  llvm::SmallPtrSet<Operation *, 8> lostUseOps;
 
 #if MLIR_ENABLE_EXPENSIVE_PATTERN_API_CHECKS
   ExpensiveChecks expensiveChecks;
@@ -868,7 +875,7 @@ bool GreedyPatternRewriteDriver::processWorklist() {
     });
 
     // If the operation is trivially dead - remove it.
-    if (deadnessListener.isOpTriviallyDead(op)) {
+    if (mayEraseIfDead(op) && deadnessListener.isOpTriviallyDead(op)) {
       rewriter.eraseOp(op);
       changed = true;
 
@@ -1112,8 +1119,22 @@ void GreedyPatternRewriteDriver::addOperandsToWorklist(Operation *op) {
     if (hasMoreThanTwoUses)
       continue;
 
+    if (config.getDeadCodeElimination() == GreedyDeadCodeElimination::NewlyDead)
+      lostUseOps.insert(defOp);
     addToWorklist(defOp);
   }
+}
+
+bool GreedyPatternRewriteDriver::mayEraseIfDead(Operation *op) const {
+  switch (config.getDeadCodeElimination()) {
+  case GreedyDeadCodeElimination::Disabled:
+    return false;
+  case GreedyDeadCodeElimination::NewlyDead:
+    return lostUseOps.contains(op);
+  case GreedyDeadCodeElimination::All:
+    return true;
+  }
+  llvm_unreachable("unknown dead code elimination mode");
 }
 
 void GreedyPatternRewriteDriver::notifyOperationErased(Operation *op) {
@@ -1138,6 +1159,7 @@ void GreedyPatternRewriteDriver::notifyOperationErased(Operation *op) {
 
   addOperandsToWorklist(op);
   worklist.remove(op);
+  lostUseOps.erase(op);
 
   if (config.getStrictness() != GreedyRewriteStrictness::AnyOp)
     strictModeFilteredOps.erase(op);
